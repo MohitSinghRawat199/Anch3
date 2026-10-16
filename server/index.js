@@ -26,6 +26,7 @@ const quarterlyAmountPaise = 50000;
 let razorpayClient;
 
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -85,12 +86,26 @@ const billingSchema = new mongoose.Schema(
 );
 const Billing = mongoose.models.Billing || mongoose.model("Billing", billingSchema);
 
-if (process.env.MONGODB_URI) {
-  mongoose
-    .connect(process.env.MONGODB_URI)
-    .then(() => console.log("MongoDB connected."))
-    .catch((error) => console.error("MongoDB connection failed:", error.message));
+let mongoReady = null;
+function connectMongo() {
+  if (!process.env.MONGODB_URI) return Promise.resolve();
+  if (mongoose.connection.readyState === 1) return Promise.resolve();
+  if (!mongoReady) {
+    mongoReady = mongoose
+      .connect(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 8000 })
+      .then(() => console.log("MongoDB connected."))
+      .catch((error) => {
+        mongoReady = null;
+        console.error("MongoDB connection failed:", error.message);
+      });
+  }
+  return mongoReady;
 }
+connectMongo();
+app.use(async (_req, _res, next) => {
+  await connectMongo();
+  next();
+});
 
 function authConfigurationError() {
   if (mongoose.connection.readyState !== 1) return "Sign-in is unavailable until MongoDB is connected.";
@@ -832,12 +847,16 @@ app.use((error, _req, res, next) => {
   return res.status(500).json({ error: "An unexpected server error occurred." });
 });
 
-if (process.env.NODE_ENV === "production") {
+if (process.env.NODE_ENV === "production" && !process.env.VERCEL) {
   const clientDist = path.resolve(__dirname, "../client/dist");
   app.use(express.static(clientDist));
   app.get("*", (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
 }
 
-app.listen(port, () => {
-  console.log(`Slide Generator API listening at http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => {
+    console.log(`Slide Generator API listening at http://localhost:${port}`);
+  });
+}
+
+export default app;
